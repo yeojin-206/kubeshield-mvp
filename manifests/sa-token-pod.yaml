@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sa-token-thief
+  namespace: attack-lab
+  labels:
+    attack: s2-sa-token-theft
+spec:
+  serviceAccountName: overprivileged-sa
+  containers:
+    - name: attacker
+      image: curlimages/curl:8.7.1
+      command: ["sleep", "infinity"]
