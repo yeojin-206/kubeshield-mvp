@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: attack-lab
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hostpath-escape
+  namespace: attack-lab
+  labels:
+    attack: s1-hostpath-escape
+spec:
+  containers:
+    - name: attacker
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: host-root
+          mountPath: /host
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+        type: Directory
