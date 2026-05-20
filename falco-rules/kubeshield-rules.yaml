@@ -1,0 +1,84 @@
+# ===========================================
+# KubeShield-MVP Custom Falco Rules
+# Kill Chain 4단계 탐지 룰
+# ===========================================
+
+# -------------------------------------------
+# S1: Container Escape — hostPath 마운트 탐지
+# -------------------------------------------
+- rule: KubeShield S1 - Host Sensitive File Access via Container
+  desc: >
+    Detects a container process reading sensitive host files
+    (e.g., /etc/shadow, /etc/passwd) through a mounted hostPath volume.
+    Indicates potential container escape via hostPath abuse.
+  condition: >
+    open_read and container and
+    (fd.name startswith /host/etc/shadow or
+     fd.name startswith /host/etc/passwd or
+     fd.name startswith /host/etc/kubernetes) and
+    not proc.name in (kubelet, containerd)
+  output: >
+    [KUBESHIELD-S1] Container escape detected: host file access
+    (user=%user.name command=%proc.cmdline file=%fd.name
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [kubeshield, container_escape, hostpath, kill_chain_s1]
+
+# -------------------------------------------
+# S2: Privilege Escalation — SA 토큰 탈취 탐지
+# -------------------------------------------
+- rule: KubeShield S2 - ServiceAccount Token Access
+  desc: >
+    Detects non-standard processes reading the Kubernetes ServiceAccount
+    token file inside a container. This is a common technique for
+    privilege escalation after initial container compromise.
+  condition: >
+    open_read and container and
+    fd.name = /var/run/secrets/kubernetes.io/serviceaccount/token and
+    not proc.name in (kubelet, containerd, coredns, kube-proxy)
+  output: >
+    [KUBESHIELD-S2] SA token theft detected: token file read
+    (user=%user.name command=%proc.cmdline
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name image=%container.image.repository)
+  priority: WARNING
+  tags: [kubeshield, privilege_escalation, sa_token, kill_chain_s2]
+
+# -------------------------------------------
+# S2-ext: SA 토큰으로 K8s API 호출 탐지
+# -------------------------------------------
+- rule: KubeShield S2 - Suspicious K8s API Call from Container
+  desc: >
+    Detects curl/wget calls to the Kubernetes API server from within
+    a container, which may indicate stolen SA token abuse.
+  condition: >
+    spawned_process and container and
+    proc.name in (curl, wget) and
+    proc.cmdline contains "kubernetes.default.svc"
+  output: >
+    [KUBESHIELD-S2] Suspicious K8s API call from container
+    (user=%user.name command=%proc.cmdline
+    container_id=%container.id container_name=%container.name
+    k8s_ns=%k8s.ns.name k8s_pod=%k8s.pod.name)
+  priority: CRITICAL
+  tags: [kubeshield, privilege_escalation, api_abuse, kill_chain_s2]
+
+# -------------------------------------------
+# S4: Persistence — Static Pod manifest 삽입 탐지
+# -------------------------------------------
+- rule: KubeShield S4 - Static Pod Manifest Write
+  desc: >
+    Detects any process writing files to the Kubernetes static pod
+    manifest directory. Attackers use this for persistence by
+    injecting malicious Pod definitions that kubelet auto-creates.
+  condition: >
+    open_write and
+    fd.name startswith /etc/kubernetes/manifests/ and
+    not proc.name in (kubelet, kubeadm)
+  output: >
+    [KUBESHIELD-S4] Static Pod manifest injection detected
+    (user=%user.name command=%proc.cmdline file=%fd.name
+    container_id=%container.id container_name=%container.name)
+  priority: CRITICAL
+  tags: [kubeshield, persistence, static_pod, kill_chain_s4]

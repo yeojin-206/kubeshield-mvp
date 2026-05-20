@@ -19,14 +19,14 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"net/http"
 	"os"
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -34,6 +34,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	"github.com/kubeshield-mvp/controller/internal/mitigation"
+	falcowebhook "github.com/kubeshield-mvp/controller/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -184,6 +187,40 @@ func main() {
 		setupLog.Error(err, "Failed to set up ready check")
 		os.Exit(1)
 	}
+
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "Failed to create kubernetes clientset")
+		os.Exit(1)
+	}
+
+	mitigator := mitigation.NewEngine(
+		ctrl.Log.WithName("mitigation"),
+		clientset,
+	)
+
+	webhookHandler := falcowebhook.NewHandler(
+		ctrl.Log.WithName("falco-webhook"),
+		mitigator,
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/webhook", webhookHandler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	falcoServer := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		setupLog.Info("Starting Falco webhook server", "addr", ":8080")
+		if err := falcoServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			setupLog.Error(err, "Falco webhook server failed")
+		}
+	}()
 
 	setupLog.Info("Starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
